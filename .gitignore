@@ -1,0 +1,60 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+*.egg-info/
+dist/
+build/
+*.log
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnp/
+.pnp.js
+.DS_Store
+
+# Build outputs
+build/
+dist/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*.code-workspace
+
+# Environment files
+.env
+.env.local
+.env.production
+
+# Test coverage and reports
+coverage/
+.coverage
+htmlcov/
+*.xml
+*.html
+test-results/
+.pytest_cache/
+
+# Docker
+*.tar
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Reports
+reports/
+sonar-scanner/
+trivy-reports/
