@@ -125,21 +125,21 @@ jobs:
             --cov=app \
             --cov-report=xml:coverage.xml
 
+      # Using official SonarCloud GitHub Action instead of manual download
       - name: SonarQube Analysis
-        run: |
-          curl -O https://binaries.sonarsource.com/distribution/sonar-scanner-cli/sonar-scanner-cli-5.0.1.3006-linux.zip
-          unzip -o sonar-scanner-cli-5.0.1.3006-linux.zip
-          export PATH=$PWD/sonar-scanner-5.0.1.3006-linux/bin:$PATH
-          sonar-scanner \
-            -Dsonar.host.url=https://sonarcloud.io \
-            -Dsonar.login=${{ secrets.SONAR_TOKEN }} \
-            -Dsonar.organization=${{ secrets.SONAR_ORG }} \
-            -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY }} \
-            -Dsonar.sources=backend/app,frontend/src \
-            -Dsonar.tests=backend/tests \
-            -Dsonar.python.coverage.reportPaths=backend/coverage.xml \
-            -Dsonar.exclusions=**/node_modules/**,**/venv/** \
-            || true
+        uses: SonarSource/sonarcloud-github-action@master
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.organization=${{ secrets.SONAR_ORG }}
+            -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY }}
+            -Dsonar.sources=backend/app,frontend/src
+            -Dsonar.tests=backend/tests
+            -Dsonar.python.coverage.reportPaths=backend/coverage.xml
+            -Dsonar.exclusions=**/node_modules/**,**/venv/**
+        continue-on-error: true
 
   # ============================================
   # STAGE 4: DOCKER IMAGE BUILD
@@ -215,42 +215,46 @@ jobs:
           docker load -i /tmp/backend-image.tar
           docker load -i /tmp/frontend-image.tar
 
-      - name: Install Trivy
-        run: |
-          curl -sfL https://github.com/aquasecurity/trivy/releases/download/v0.48.3/trivy_0.48.3_Linux-64bit.tar.gz | tar -xzf -
-          sudo mv trivy /usr/local/bin/
+      # Using official Trivy GitHub Action instead of manual download
+      - name: Scan Backend Image
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'image'
+          image-ref: '${{ env.ECR_REGISTRY }}/${{ env.ECR_BACKEND_REPO }}:latest'
+          format: 'json'
+          output: '/tmp/trivy-backend-report.json'
+          ignore-unfixed: true
+          exit-code: '0'
 
-      - name: Scan Backend Image - JSON Report
-        run: |
-          trivy image \
-            --format json \
-            --output /tmp/trivy-backend-report.json \
-            --ignore-unfixed \
-            ${{ env.ECR_REGISTRY }}/${{ env.ECR_BACKEND_REPO }}:latest || true
+      - name: Scan Backend Image - Table
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'image'
+          image-ref: '${{ env.ECR_REGISTRY }}/${{ env.ECR_BACKEND_REPO }}:latest'
+          format: 'table'
+          output: '/tmp/trivy-backend-report.txt'
+          ignore-unfixed: true
+          exit-code: '0'
 
-      - name: Scan Backend Image - Table Report
-        run: |
-          trivy image \
-            --format table \
-            --output /tmp/trivy-backend-report.txt \
-            --ignore-unfixed \
-            ${{ env.ECR_REGISTRY }}/${{ env.ECR_BACKEND_REPO }}:latest || true
+      - name: Scan Frontend Image
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'image'
+          image-ref: '${{ env.ECR_REGISTRY }}/${{ env.ECR_FRONTEND_REPO }}:latest'
+          format: 'json'
+          output: '/tmp/trivy-frontend-report.json'
+          ignore-unfixed: true
+          exit-code: '0'
 
-      - name: Scan Frontend Image - JSON Report
-        run: |
-          trivy image \
-            --format json \
-            --output /tmp/trivy-frontend-report.json \
-            --ignore-unfixed \
-            ${{ env.ECR_REGISTRY }}/${{ env.ECR_FRONTEND_REPO }}:latest || true
-
-      - name: Scan Frontend Image - Table Report
-        run: |
-          trivy image \
-            --format table \
-            --output /tmp/trivy-frontend-report.txt \
-            --ignore-unfixed \
-            ${{ env.ECR_REGISTRY }}/${{ env.ECR_FRONTEND_REPO }}:latest || true
+      - name: Scan Frontend Image - Table
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'image'
+          image-ref: '${{ env.ECR_REGISTRY }}/${{ env.ECR_FRONTEND_REPO }}:latest'
+          format: 'table'
+          output: '/tmp/trivy-frontend-report.txt'
+          ignore-unfixed: true
+          exit-code: '0'
 
       - name: Upload Trivy Reports
         if: always()
