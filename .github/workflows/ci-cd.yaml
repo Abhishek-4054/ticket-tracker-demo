@@ -51,8 +51,8 @@ jobs:
             --junit-xml=test-results/pytest-report.xml
 
       - name: Upload test reports
+        if: always()
         uses: actions/upload-artifact@v4
-        always: true
         with:
           name: backend-test-reports
           path: |
@@ -253,8 +253,8 @@ jobs:
             ${{ env.ECR_REGISTRY }}/${{ env.ECR_FRONTEND_REPO }}:latest || true
 
       - name: Upload Trivy Reports
+        if: always()
         uses: actions/upload-artifact@v4
-        always: true
         with:
           name: trivy-security-reports
           path: |
@@ -332,7 +332,6 @@ jobs:
           echo "BACKEND_IMAGE=${{ env.ECR_REGISTRY }}/${{ env.ECR_BACKEND_REPO }}:sha-$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_ENV
           echo "FRONTEND_IMAGE=${{ env.ECR_REGISTRY }}/${{ env.ECR_FRONTEND_REPO }}:sha-$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_ENV
 
-      # THIS IS THE KEY STEP - Replace PLACEHOLDER with real image name
       - name: Replace image placeholders in k8s files
         run: |
           sed -i "s|BACKEND_IMAGE_PLACEHOLDER|${{ env.BACKEND_IMAGE }}|g" k8s/backend-deployment.yaml
@@ -350,13 +349,11 @@ jobs:
           chmod 600 ~/.ssh/ec2_key
           ssh-keyscan -H ${{ env.EC2_HOST }} >> ~/.ssh/known_hosts
 
-      # Copy k8s files to EC2
       - name: Copy k8s manifests to EC2
         run: |
           scp -i ~/.ssh/ec2_key -o StrictHostKeyChecking=no k8s/backend-deployment.yaml ${{ env.EC2_USER }}@${{ env.EC2_HOST }}:/home/${{ env.EC2_USER }}/backend-deployment.yaml
           scp -i ~/.ssh/ec2_key -o StrictHostKeyChecking=no k8s/frontend-deployment.yaml ${{ env.EC2_USER }}@${{ env.EC2_HOST }}:/home/${{ env.EC2_USER }}/frontend-deployment.yaml
 
-      # SSH into EC2 and apply
       - name: Deploy to Kubernetes on EC2
         run: |
           ssh -i ~/.ssh/ec2_key -o StrictHostKeyChecking=no ${{ env.EC2_USER }}@${{ env.EC2_HOST }} <<'COMMANDS'
@@ -403,7 +400,7 @@ jobs:
           echo "=== Deployments ==="
           kubectl get deployments -n ticket-tracker
 
-          # Cleanup copied files
+          # Cleanup
           rm -f /home/ubuntu/backend-deployment.yaml
           rm -f /home/ubuntu/frontend-deployment.yaml
           COMMANDS
