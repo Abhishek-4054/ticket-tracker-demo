@@ -1,3 +1,28 @@
 # https://www.robotstxt.org/robotstxt.html
 User-agent: *
 Disallow:
+```
+
+---
+
+## **Verify your `frontend/public/` folder**
+
+Your structure should look like:
+```
+frontend/
+├── public/
+│   ├── index.html        ← This was missing!
+│   ├── manifest.json
+│   └── robots.txt
+├── src/
+│   ├── App.tsx
+│   ├── App.css
+│   ├── api.ts
+│   ├── types.ts
+│   ├── index.tsx
+│   └── react-app-env.d.ts
+├── package.json
+├── tsconfig.json
+├── Dockerfile
+├── nginx.conf
+└── .env.development
