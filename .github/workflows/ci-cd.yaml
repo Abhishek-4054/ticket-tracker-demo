@@ -125,13 +125,20 @@ jobs:
             --cov=app \
             --cov-report=xml:coverage.xml
 
-      # Using official SonarCloud GitHub Action instead of manual download
+      # Trim any hidden newline/whitespace from the token
+      - name: Clean SONAR_TOKEN
+        id: clean-token
+        run: |
+          CLEAN_TOKEN=$(echo "${{ secrets.SONAR_TOKEN }}" | tr -d '[:space:]')
+          echo "token=$CLEAN_TOKEN" >> $GITHUB_OUTPUT
+
       - name: SonarQube Analysis
-        uses: SonarSource/sonarcloud-github-action@master
+        uses: SonarSource/sonarqube-scan-action@v5.0.0
         env:
+          SONAR_TOKEN: ${{ steps.clean-token.outputs.token }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         with:
+          sonarqube-url: https://sonarcloud.io
           args: >
             -Dsonar.organization=${{ secrets.SONAR_ORG }}
             -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY }}
@@ -215,7 +222,6 @@ jobs:
           docker load -i /tmp/backend-image.tar
           docker load -i /tmp/frontend-image.tar
 
-      # Using official Trivy GitHub Action instead of manual download
       - name: Scan Backend Image
         uses: aquasecurity/trivy-action@master
         with:
