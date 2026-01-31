@@ -338,7 +338,7 @@ function App() {
               </div>
 
               <div className="form-group">
-                <label>Description *</label>
+                <label>. Description *</label>
                 <textarea
                   value={formData.description}
                   onChange={(e) => setFormData({...formData, description: e.target.value})}
