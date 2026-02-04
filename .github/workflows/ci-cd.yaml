@@ -212,7 +212,16 @@ jobs:
         run: |
           python -m pytest tests/ \
             --cov=app \
-            --cov-report=xml:coverage.xml
+            --cov-report=xml:coverage.xml \
+            --cov-branch
+
+      - name: Fix coverage file paths
+        working-directory: backend
+        run: |
+          # Replace absolute paths with relative paths in coverage.xml
+          sed -i 's|<source>.*</source>|<source>./backend</source>|g' coverage.xml
+          # Ensure filename paths are correct
+          sed -i 's|filename="app/|filename="backend/app/|g' coverage.xml
 
       - name: SonarCloud Scan
         uses: SonarSource/sonarcloud-github-action@v3
@@ -225,8 +234,11 @@ jobs:
             -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY }}
             -Dsonar.sources=backend/app,frontend/src
             -Dsonar.tests=backend/tests
+            -Dsonar.python.version=3.11
             -Dsonar.python.coverage.reportPaths=backend/coverage.xml
-            -Dsonar.exclusions=**/node_modules/**,**/venv/**,**/__pycache__/**
+            -Dsonar.sourceEncoding=UTF-8
+            -Dsonar.exclusions=**/node_modules/**,**/venv/**,**/__pycache__/**,**/build/**,**/dist/**,**/*.test.js,**/*.test.ts,**/*.test.tsx
+            -Dsonar.coverage.exclusions=**/tests/**,**/__tests__/**,**/*.test.js,**/*.test.ts,**/*.test.tsx
             -Dsonar.qualitygate.wait=true
 
       - name: 🚨 CHECK SONARCLOUD QUALITY GATE 🚨
