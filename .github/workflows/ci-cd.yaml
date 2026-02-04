@@ -215,13 +215,42 @@ jobs:
             --cov-report=xml:coverage.xml \
             --cov-branch
 
-      - name: Fix coverage file paths
-        working-directory: backend
+      - name: Fix coverage.xml paths for SonarCloud
         run: |
-          # Replace absolute paths with relative paths in coverage.xml
-          sed -i 's|<source>.*</source>|<source>./backend</source>|g' coverage.xml
-          # Ensure filename paths are correct
-          sed -i 's|filename="app/|filename="backend/app/|g' coverage.xml
+          python3 << 'EOF'
+          import xml.etree.ElementTree as ET
+          import os
+          
+          # Parse the coverage.xml file
+          tree = ET.parse('backend/coverage.xml')
+          root = tree.getroot()
+          
+          # Fix the source paths
+          for source in root.findall('.//source'):
+              # Remove the source tag content or set it to current directory
+              source.text = os.path.abspath('.')
+          
+          # Fix the package/class filename attributes
+          for package in root.findall('.//package'):
+              for class_elem in package.findall('.//class'):
+                  filename = class_elem.get('filename')
+                  if filename:
+                      # If filename doesn't start with 'backend/', add it
+                      if not filename.startswith('backend/'):
+                          class_elem.set('filename', f'backend/{filename}')
+          
+          # Save the modified file
+          tree.write('backend/coverage.xml', encoding='utf-8', xml_declaration=True)
+          print("✅ Coverage paths fixed successfully")
+          EOF
+
+      - name: Verify coverage.xml structure
+        run: |
+          echo "=== Coverage.xml Source Tags ==="
+          grep -A 1 "<source>" backend/coverage.xml || echo "No source tags found"
+          echo ""
+          echo "=== Sample filename attributes ==="
+          grep "filename=" backend/coverage.xml | head -5 || echo "No filename attributes found"
 
       - name: SonarCloud Scan
         uses: SonarSource/sonarcloud-github-action@v3
