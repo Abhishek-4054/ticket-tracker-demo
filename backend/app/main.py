@@ -212,6 +212,9 @@ def get_stats():
             "critical": len([t for t in tickets if t["priority"] == "critical"])
         }
     }
+
+
+
 def calculate_ticket_metrics(tickets: list) -> dict:
     """Calculate advanced ticket metrics"""
     if not tickets:
