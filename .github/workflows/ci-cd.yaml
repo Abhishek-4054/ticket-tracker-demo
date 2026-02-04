@@ -42,10 +42,10 @@ jobs:
         working-directory: backend
         run: |
           coverage run -m pytest tests/ --junitxml=test-results/pytest-report.xml
-          coverage combine
           coverage xml -o coverage.xml
           coverage html -d coverage-html
           coverage report -m
+
 
       - name: 🚨 Enforce Coverage Threshold 🚨
         working-directory: backend
