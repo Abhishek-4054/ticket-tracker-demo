@@ -1,4 +1,4 @@
-name: CI/CD Pipeline - Ticket Tracker
+name: CI/CD Pipeline - Ticket Tracker with Quality Gates
 
 on:
   push:
@@ -14,13 +14,14 @@ env:
   EC2_HOST: ${{ secrets.EC2_HOST }}
   EC2_USER: ${{ secrets.EC2_USER }}
   ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
+  COVERAGE_THRESHOLD: 80  # Minimum required coverage percentage
 
 jobs:
   # ============================================
-  # STAGE 1: BACKEND UNIT TESTS
+  # STAGE 1: BACKEND UNIT TESTS WITH COVERAGE GATE
   # ============================================
   backend-tests:
-    name: "Stage 1 - Backend Unit Tests"
+    name: "Stage 1 - Backend Tests & Coverage Gate"
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -50,6 +51,65 @@ jobs:
             --cov-report=term-missing \
             --junit-xml=test-results/pytest-report.xml
 
+      - name: 🚨 ENFORCE COVERAGE THRESHOLD 🚨
+        working-directory: backend
+        run: |
+          echo "=========================================="
+          echo "   COVERAGE QUALITY GATE"
+          echo "   Threshold: ${COVERAGE_THRESHOLD}%"
+          echo "=========================================="
+          
+          # Extract coverage percentage
+          COVERAGE=$(python -m pytest tests/ --cov=app --cov-report=term-missing --quiet | grep "TOTAL" | awk '{print $4}' | sed 's/%//')
+          
+          echo "📊 Current Coverage: ${COVERAGE}%"
+          echo "🎯 Required Coverage: ${COVERAGE_THRESHOLD}%"
+          
+          # Check if coverage meets threshold
+          if (( $(echo "$COVERAGE < $COVERAGE_THRESHOLD" | bc -l) )); then
+            echo ""
+            echo "❌ ============================================="
+            echo "❌   COVERAGE GATE FAILED!"
+            echo "❌ ============================================="
+            echo "❌ Coverage: ${COVERAGE}% is below threshold: ${COVERAGE_THRESHOLD}%"
+            echo "❌ Pipeline will STOP here - no deployment will occur"
+            echo "❌ ============================================="
+            echo ""
+            echo "💡 To fix:"
+            echo "   1. Add tests to cover untested code"
+            echo "   2. Remove untested functions"
+            echo "   3. Ensure all code paths are tested"
+            exit 1
+          else
+            echo ""
+            echo "✅ ============================================="
+            echo "✅   COVERAGE GATE PASSED!"
+            echo "✅ ============================================="
+            echo "✅ Coverage: ${COVERAGE}% meets threshold: ${COVERAGE_THRESHOLD}%"
+            echo "✅ Proceeding to next stage..."
+            echo "✅ ============================================="
+          fi
+
+      - name: Generate Coverage Badge
+        if: always()
+        working-directory: backend
+        run: |
+          COVERAGE=$(python -m pytest tests/ --cov=app --cov-report=term-missing --quiet | grep "TOTAL" | awk '{print $4}' | sed 's/%//')
+          echo "coverage=$COVERAGE" >> $GITHUB_ENV
+          
+          if (( $(echo "$COVERAGE >= 90" | bc -l) )); then
+            COLOR="brightgreen"
+          elif (( $(echo "$COVERAGE >= 80" | bc -l) )); then
+            COLOR="green"
+          elif (( $(echo "$COVERAGE >= 70" | bc -l) )); then
+            COLOR="yellow"
+          elif (( $(echo "$COVERAGE >= 60" | bc -l) )); then
+            COLOR="orange"
+          else
+            COLOR="red"
+          fi
+          echo "coverage_color=$COLOR" >> $GITHUB_ENV
+
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -60,12 +120,41 @@ jobs:
             backend/coverage.xml
             backend/coverage-html/
 
+      - name: Comment Coverage on PR
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const coverage = process.env.coverage;
+            const threshold = process.env.COVERAGE_THRESHOLD;
+            const passed = parseFloat(coverage) >= parseFloat(threshold);
+            const emoji = passed ? '✅' : '❌';
+            const status = passed ? 'PASSED' : 'FAILED';
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## ${emoji} Coverage Quality Gate ${status}
+              
+              **Coverage:** ${coverage}%
+              **Threshold:** ${threshold}%
+              **Status:** ${status}
+              
+              ${passed ? 
+                '✅ Code coverage meets the required threshold!' : 
+                '❌ Code coverage is below the required threshold. Please add more tests.'}
+              
+              [View detailed coverage report in artifacts]`
+            })
+
   # ============================================
   # STAGE 2: FRONTEND BUILD CHECK
   # ============================================
   frontend-build:
     name: "Stage 2 - Frontend Build Check"
     runs-on: ubuntu-latest
+    needs: [backend-tests]  # Only runs if backend tests pass
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -95,17 +184,17 @@ jobs:
           path: frontend/build/
 
   # ============================================
-  # STAGE 3: SONARCLOUD SCAN
+  # STAGE 3: SONARCLOUD SCAN WITH QUALITY GATE
   # ============================================
   sonarcloud-scan:
-    name: "Stage 3 - SonarCloud Code Quality"
+    name: "Stage 3 - SonarCloud Quality Gate"
     runs-on: ubuntu-latest
     needs: [backend-tests, frontend-build]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0  # Full history for better analysis
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -137,7 +226,77 @@ jobs:
             -Dsonar.sources=backend/app,frontend/src
             -Dsonar.tests=backend/tests
             -Dsonar.python.coverage.reportPaths=backend/coverage.xml
-            -Dsonar.exclusions=**/node_modules/**,**/venv/**
+            -Dsonar.exclusions=**/node_modules/**,**/venv/**,**/__pycache__/**
+            -Dsonar.qualitygate.wait=true
+
+      - name: 🚨 CHECK SONARCLOUD QUALITY GATE 🚨
+        run: |
+          echo "=========================================="
+          echo "   SONARCLOUD QUALITY GATE CHECK"
+          echo "=========================================="
+          echo ""
+          echo "⏳ Waiting for SonarCloud analysis to complete..."
+          sleep 10
+          
+          # Check quality gate status
+          QUALITY_GATE=$(curl -s -u ${{ secrets.SONAR_TOKEN }}: \
+            "https://sonarcloud.io/api/qualitygates/project_status?projectKey=${{ secrets.SONAR_PROJECT_KEY }}" \
+            | jq -r '.projectStatus.status')
+          
+          echo "📊 Quality Gate Status: $QUALITY_GATE"
+          
+          if [ "$QUALITY_GATE" != "OK" ]; then
+            echo ""
+            echo "❌ ============================================="
+            echo "❌   SONARCLOUD QUALITY GATE FAILED!"
+            echo "❌ ============================================="
+            echo "❌ Code quality does not meet requirements"
+            echo "❌ Pipeline will STOP here - no deployment will occur"
+            echo "❌ ============================================="
+            echo ""
+            echo "Issues found may include:"
+            echo "  • Code smells"
+            echo "  • Security vulnerabilities"
+            echo "  • Code duplication"
+            echo "  • Bugs"
+            echo "  • Technical debt"
+            echo ""
+            echo "🔗 View details: https://sonarcloud.io/dashboard?id=${{ secrets.SONAR_PROJECT_KEY }}"
+            exit 1
+          else
+            echo ""
+            echo "✅ ============================================="
+            echo "✅   SONARCLOUD QUALITY GATE PASSED!"
+            echo "✅ ============================================="
+            echo "✅ Code quality meets all requirements"
+            echo "✅ Proceeding to next stage..."
+            echo "✅ ============================================="
+          fi
+
+      - name: Comment Quality Gate on PR
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const qualityGate = process.env.QUALITY_GATE || 'UNKNOWN';
+            const passed = qualityGate === 'OK';
+            const emoji = passed ? '✅' : '❌';
+            const status = passed ? 'PASSED' : 'FAILED';
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## ${emoji} SonarCloud Quality Gate ${status}
+              
+              **Status:** ${status}
+              
+              ${passed ? 
+                '✅ Code quality meets all requirements!' : 
+                '❌ Code quality issues detected. Please review and fix:\n\n• Code smells\n• Security vulnerabilities\n• Duplications\n• Bugs'}
+              
+              [View detailed analysis on SonarCloud](https://sonarcloud.io/dashboard?id=${{ secrets.SONAR_PROJECT_KEY }})`
+            })
 
   # ============================================
   # STAGE 4: DOCKER IMAGE BUILD
@@ -145,7 +304,7 @@ jobs:
   docker-build:
     name: "Stage 4 - Docker Image Build"
     runs-on: ubuntu-latest
-    needs: [sonarcloud-scan]
+    needs: [sonarcloud-scan]  # Only runs if quality gate passes
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -337,11 +496,6 @@ jobs:
         run: |
           sed -i "s|BACKEND_IMAGE_PLACEHOLDER|${{ env.BACKEND_IMAGE }}|g" k8s/backend-deployment.yaml
           sed -i "s|FRONTEND_IMAGE_PLACEHOLDER|${{ env.FRONTEND_IMAGE }}|g" k8s/frontend-deployment.yaml
-          echo "=== Backend YAML after replacement ==="
-          cat k8s/backend-deployment.yaml
-          echo ""
-          echo "=== Frontend YAML after replacement ==="
-          cat k8s/frontend-deployment.yaml
 
       - name: Setup SSH Key
         run: |
@@ -358,13 +512,13 @@ jobs:
       - name: Deploy to Kubernetes on EC2
         run: |
           ssh -i ~/.ssh/ec2_key -o StrictHostKeyChecking=no ${{ env.EC2_USER }}@${{ env.EC2_HOST }} <<'COMMANDS'
-
+          
           # Login to ECR
           aws ecr get-login-password --region us-east-1 | sudo docker login --username AWS --password-stdin $(aws sts get-caller-identity --query Account --output text).dkr.ecr.us-east-1.amazonaws.com
-
+          
           # Create namespace
           kubectl create namespace ticket-tracker --dry-run=client -o yaml | kubectl apply -f -
-
+          
           # Create ECR pull secret
           kubectl create secret docker-registry ecr-secret \
             --docker-server=$(aws sts get-caller-identity --query Account --output text).dkr.ecr.us-east-1.amazonaws.com \
@@ -372,36 +526,38 @@ jobs:
             --docker-password=$(aws ecr get-login-password --region us-east-1) \
             --namespace=ticket-tracker \
             --dry-run=client -o yaml | kubectl apply -f -
-
-          # Apply backend deployment
+          
+          # Apply deployments
           kubectl apply -f /home/ubuntu/backend-deployment.yaml
-
-          # Apply frontend deployment
           kubectl apply -f /home/ubuntu/frontend-deployment.yaml
-
-          # Wait for pods to be ready
-          echo "=== Waiting for backend rollout ==="
+          
+          # Wait for rollout
           kubectl rollout status deployment/backend-deployment -n ticket-tracker --timeout=120s
-
-          echo "=== Waiting for frontend rollout ==="
           kubectl rollout status deployment/frontend-deployment -n ticket-tracker --timeout=120s
-
-          # Final status
+          
           echo ""
-          echo "========================================="
-          echo "   DEPLOYMENT SUCCESSFUL!"
-          echo "========================================="
+          echo "✅ ========================================="
+          echo "✅   DEPLOYMENT SUCCESSFUL!"
+          echo "✅ ========================================="
           echo ""
-          echo "=== Pods ==="
           kubectl get pods -n ticket-tracker -o wide
-          echo ""
-          echo "=== Services ==="
           kubectl get services -n ticket-tracker
-          echo ""
-          echo "=== Deployments ==="
-          kubectl get deployments -n ticket-tracker
-
+          
           # Cleanup
           rm -f /home/ubuntu/backend-deployment.yaml
           rm -f /home/ubuntu/frontend-deployment.yaml
           COMMANDS
+
+      - name: 🎉 Pipeline Complete
+        run: |
+          echo ""
+          echo "🎉 ============================================="
+          echo "🎉   CI/CD PIPELINE COMPLETED SUCCESSFULLY!"
+          echo "🎉 ============================================="
+          echo "🎉 All quality gates passed:"
+          echo "   ✅ Unit Test Coverage ≥ 80%"
+          echo "   ✅ SonarCloud Quality Gate"
+          echo "   ✅ Security Scan (Trivy)"
+          echo "   ✅ Docker Images Built & Pushed"
+          echo "   ✅ Deployed to Kubernetes"
+          echo "🎉 ============================================="

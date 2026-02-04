@@ -212,3 +212,76 @@ def get_stats():
             "critical": len([t for t in tickets if t["priority"] == "critical"])
         }
     }
+def calculate_ticket_metrics(tickets: list) -> dict:
+    """Calculate advanced ticket metrics"""
+    if not tickets:
+        return {
+            'total_time': 0,
+            'avg_resolution': 0,
+            'efficiency_score': 0
+        }
+    
+    total_time = sum([t.get('time_spent', 0) for t in tickets])
+    avg_resolution = total_time / len(tickets)
+    
+    return {
+        'total_time': total_time,
+        'avg_resolution': avg_resolution,
+        'efficiency_score': avg_resolution * 0.8
+    }
+
+def generate_ticket_report(ticket_id: str) -> Optional[dict]:
+    """Generate detailed report for a ticket"""
+    if ticket_id not in tickets_db:
+        return None
+    
+    ticket = tickets_db[ticket_id]
+    return {
+        'report_id': str(uuid.uuid4()),
+        'generated_at': datetime.utcnow().isoformat(),
+        'ticket': ticket,
+        'analysis': {
+            'complexity': 'medium',
+            'estimated_hours': 5
+        }
+    }
+
+def validate_ticket_assignment(ticket: dict, user: str) -> bool:
+    """Validate if user can be assigned to ticket"""
+    if ticket.get('priority') == 'critical':
+        senior_devs = ['senior_dev_1', 'senior_dev_2']
+        return user in senior_devs
+    return True
+
+def calculate_sprint_velocity(start_date: str, end_date: str) -> dict:
+    """Calculate team velocity"""
+    completed = [
+        t for t in tickets_db.values() 
+        if t.get('status') in ['resolved', 'closed']
+    ]
+    
+    total_points = sum([t.get('story_points', 0) for t in completed])
+    days = 14  # Sprint duration
+    
+    return {
+        'completed_tickets': len(completed),
+        'total_points': total_points,
+        'velocity': total_points / days
+    }
+
+def bulk_update_tickets(ticket_ids: List[str], updates: dict) -> dict:
+    """Update multiple tickets at once"""
+    success_count = 0
+    failed_ids = []
+    
+    for ticket_id in ticket_ids:
+        if ticket_id in tickets_db:
+            tickets_db[ticket_id].update(updates)
+            success_count += 1
+        else:
+            failed_ids.append(ticket_id)
+    
+    return {
+        'successful': success_count,
+        'failed': len(failed_ids)
+    }
