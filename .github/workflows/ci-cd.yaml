@@ -183,12 +183,14 @@ jobs:
         with:
           name: backend-docker-image
           path: /tmp/backend-image.tar
+          retention-days: 1
 
       - name: Upload Frontend image artifact
         uses: actions/upload-artifact@v4
         with:
           name: frontend-docker-image
           path: /tmp/frontend-image.tar
+          retention-days: 1
 
   # ============================================
   # STAGE 5: TRIVY SECURITY SCAN
@@ -265,6 +267,7 @@ jobs:
             /tmp/trivy-backend-report.txt
             /tmp/trivy-frontend-report.json
             /tmp/trivy-frontend-report.txt
+          retention-days: 7
             
   # ============================================
   # STAGE 6: PUSH DOCKER IMAGES TO AWS ECR
@@ -273,6 +276,7 @@ jobs:
     name: "Stage 6 - Push Images to AWS ECR"
     runs-on: ubuntu-latest
     needs: [trivy-scan]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -325,6 +329,7 @@ jobs:
     name: "Stage 7 - Deploy to Kubernetes"
     runs-on: ubuntu-latest
     needs: [ecr-push]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -348,38 +353,85 @@ jobs:
       - name: Setup SSH Key
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/ec2_key
+          chmod 700 ~/.ssh
+          # Write SSH key using printf to preserve formatting
+          printf '%s\n' "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/ec2_key
           chmod 600 ~/.ssh/ec2_key
-          ssh-keyscan -H ${{ env.EC2_HOST }} >> ~/.ssh/known_hosts
+          # Verify key format
+          if ! ssh-keygen -l -f ~/.ssh/ec2_key > /dev/null 2>&1; then
+            echo "Error: Invalid SSH key format"
+            exit 1
+          fi
+          # Add EC2 host to known_hosts
+          ssh-keyscan -H ${{ env.EC2_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+          chmod 644 ~/.ssh/known_hosts
+          
+      - name: Test SSH Connection
+        run: |
+          ssh -i ~/.ssh/ec2_key -o StrictHostKeyChecking=no -o ConnectTimeout=10 ${{ env.EC2_USER }}@${{ env.EC2_HOST }} "echo 'SSH connection successful'"
           
       - name: Copy k8s manifests to EC2
         run: |
-          scp -i ~/.ssh/ec2_key -o StrictHostKeyChecking=no k8s/backend-deployment.yaml ${{ env.EC2_USER }}@${{ env.EC2_HOST }}:/home/${{ env.EC2_USER }}/backend-deployment.yaml
-          scp -i ~/.ssh/ec2_key -o StrictHostKeyChecking=no k8s/frontend-deployment.yaml ${{ env.EC2_USER }}@${{ env.EC2_HOST }}:/home/${{ env.EC2_USER }}/frontend-deployment.yaml
+          scp -i ~/.ssh/ec2_key -o StrictHostKeyChecking=no \
+            k8s/backend-deployment.yaml \
+            ${{ env.EC2_USER }}@${{ env.EC2_HOST }}:/home/${{ env.EC2_USER }}/backend-deployment.yaml
+          scp -i ~/.ssh/ec2_key -o StrictHostKeyChecking=no \
+            k8s/frontend-deployment.yaml \
+            ${{ env.EC2_USER }}@${{ env.EC2_HOST }}:/home/${{ env.EC2_USER }}/frontend-deployment.yaml
           
       - name: Deploy to Kubernetes on EC2
         run: |
-          ssh -i ~/.ssh/ec2_key -o StrictHostKeyChecking=no ${{ env.EC2_USER }}@${{ env.EC2_HOST }} <<'COMMANDS'
+          ssh -i ~/.ssh/ec2_key -o StrictHostKeyChecking=no ${{ env.EC2_USER }}@${{ env.EC2_HOST }} bash << 'ENDSSH'
+          set -e
+          
+          echo "========================================="
+          echo "  Starting Kubernetes Deployment"
+          echo "========================================="
+          
           # Login to ECR
-          aws ecr get-login-password --region us-east-1 | sudo docker login --username AWS --password-stdin $(aws sts get-caller-identity --query Account --output text).dkr.ecr.us-east-1.amazonaws.com
+          echo "=== Logging into ECR ==="
+          aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | \
+            sudo docker login --username AWS --password-stdin \
+            ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
+          
           # Create namespace
+          echo "=== Creating/Updating namespace ==="
           kubectl create namespace ticket-tracker --dry-run=client -o yaml | kubectl apply -f -
-          # Create ECR pull secret
+          
+          # Create/Update ECR pull secret
+          echo "=== Creating/Updating ECR pull secret ==="
           kubectl create secret docker-registry ecr-secret \
-            --docker-server=$(aws sts get-caller-identity --query Account --output text).dkr.ecr.us-east-1.amazonaws.com \
+            --docker-server=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com \
             --docker-username=AWS \
-            --docker-password=$(aws ecr get-login-password --region us-east-1) \
+            --docker-password=$(aws ecr get-login-password --region ${{ secrets.AWS_REGION }}) \
             --namespace=ticket-tracker \
             --dry-run=client -o yaml | kubectl apply -f -
+          
           # Apply backend deployment
-          kubectl apply -f /home/ubuntu/backend-deployment.yaml
+          echo "=== Applying backend deployment ==="
+          kubectl apply -f /home/${{ env.EC2_USER }}/backend-deployment.yaml
+          
           # Apply frontend deployment
-          kubectl apply -f /home/ubuntu/frontend-deployment.yaml
-          # Wait for pods to be ready
+          echo "=== Applying frontend deployment ==="
+          kubectl apply -f /home/${{ env.EC2_USER }}/frontend-deployment.yaml
+          
+          # Wait for deployments to be ready
           echo "=== Waiting for backend rollout ==="
-          kubectl rollout status deployment/backend-deployment -n ticket-tracker --timeout=120s
+          kubectl rollout status deployment/backend-deployment -n ticket-tracker --timeout=180s || {
+            echo "Backend deployment failed, checking logs..."
+            kubectl describe deployment backend-deployment -n ticket-tracker
+            kubectl logs -n ticket-tracker -l app=backend --tail=50
+            exit 1
+          }
+          
           echo "=== Waiting for frontend rollout ==="
-          kubectl rollout status deployment/frontend-deployment -n ticket-tracker --timeout=120s
+          kubectl rollout status deployment/frontend-deployment -n ticket-tracker --timeout=180s || {
+            echo "Frontend deployment failed, checking logs..."
+            kubectl describe deployment frontend-deployment -n ticket-tracker
+            kubectl logs -n ticket-tracker -l app=frontend --tail=50
+            exit 1
+          }
+          
           # Final status
           echo ""
           echo "========================================="
@@ -394,7 +446,63 @@ jobs:
           echo ""
           echo "=== Deployments ==="
           kubectl get deployments -n ticket-tracker
-          # Cleanup
-          rm -f /home/ubuntu/backend-deployment.yaml
-          rm -f /home/ubuntu/frontend-deployment.yaml
-          COMMANDS
+          echo ""
+          echo "=== Recent Events ==="
+          kubectl get events -n ticket-tracker --sort-by='.lastTimestamp' | tail -20
+          
+          # Cleanup manifest files
+          rm -f /home/${{ env.EC2_USER }}/backend-deployment.yaml
+          rm -f /home/${{ env.EC2_USER }}/frontend-deployment.yaml
+          
+          echo ""
+          echo "========================================="
+          echo "   Cleanup completed"
+          echo "========================================="
+          ENDSSH
+          
+      - name: Verify Deployment
+        if: success()
+        run: |
+          ssh -i ~/.ssh/ec2_key -o StrictHostKeyChecking=no ${{ env.EC2_USER }}@${{ env.EC2_HOST }} bash << 'ENDSSH'
+          echo "=== Final Verification ==="
+          kubectl get all -n ticket-tracker
+          echo ""
+          echo "=== Checking Pod Health ==="
+          kubectl get pods -n ticket-tracker -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.phase}{"\t"}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}'
+          ENDSSH
+          
+      - name: Cleanup SSH Key
+        if: always()
+        run: |
+          rm -f ~/.ssh/ec2_key
+          
+  # ============================================
+  # NOTIFICATION: PIPELINE STATUS
+  # ============================================
+  notify:
+    name: "Pipeline Status Notification"
+    runs-on: ubuntu-latest
+    needs: [deploy]
+    if: always()
+    steps:
+      - name: Check Pipeline Status
+        run: |
+          if [ "${{ needs.deploy.result }}" == "success" ]; then
+            echo "✅ Pipeline completed successfully!"
+            echo "STATUS=success" >> $GITHUB_ENV
+          else
+            echo "❌ Pipeline failed!"
+            echo "STATUS=failure" >> $GITHUB_ENV
+          fi
+          
+      - name: Display Summary
+        run: |
+          echo "========================================="
+          echo "  CI/CD Pipeline Summary"
+          echo "========================================="
+          echo "Repository: ${{ github.repository }}"
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "Actor: ${{ github.actor }}"
+          echo "Status: ${{ env.STATUS }}"
+          echo "========================================="
