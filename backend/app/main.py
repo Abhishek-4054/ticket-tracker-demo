@@ -211,4 +211,69 @@ def get_stats():
             "high": len([t for t in tickets if t["priority"] == "high"]),
             "critical": len([t for t in tickets if t["priority"] == "critical"])
         }
+   
+    }
+
+
+
+
+
+@app.get("/api/tickets/overdue/list")
+def get_overdue_tickets_endpoint(max_days: int = 7):
+    """
+    Get overdue tickets
+    NO TESTS FOR THIS ENDPOINT - will reduce coverage!
+    """
+    overdue = get_overdue_tickets(max_days)
+    return {
+        "count": len(overdue),
+        "max_days": max_days,
+        "tickets": overdue
+    }
+
+
+@app.post("/api/tickets/{ticket_id}/auto-assign")
+def auto_assign_endpoint(ticket_id: str, team_members: List[str]):
+    """
+    Auto-assign ticket to least busy team member
+    NO TESTS FOR THIS ENDPOINT - will reduce coverage!
+    """
+    success = assign_ticket_automatically(ticket_id, team_members)
+    if not success:
+        raise HTTPException(status_code=400, detail="Assignment failed")
+    return {"message": "Ticket assigned successfully", "ticket_id": ticket_id}
+
+
+@app.get("/api/reports/detailed")
+def detailed_report_endpoint(status: Optional[str] = None):
+    """
+    Get detailed ticket report
+    NO TESTS FOR THIS ENDPOINT - will reduce coverage!
+    """
+    report = generate_ticket_report(status)
+    return report
+
+
+@app.post("/api/tickets/bulk-update")
+def bulk_update_endpoint(ticket_ids: List[str], updates: dict):
+    """
+    Bulk update multiple tickets
+    NO TESTS FOR THIS ENDPOINT - will reduce coverage!
+    """
+    results = bulk_update_tickets(ticket_ids, updates)
+    return results
+
+
+@app.get("/api/analytics/overview")
+def analytics_overview():
+    """
+    Get analytics overview
+    NO TESTS FOR THIS ENDPOINT - will reduce coverage!
+    """
+    analytics = TicketAnalytics(tickets_db)
+    return {
+        "completion_rate": analytics.get_completion_rate(),
+        "average_resolution_time_days": analytics.get_average_resolution_time(),
+        "tickets_by_assignee": analytics.get_tickets_by_assignee(),
+        "high_priority_open": analytics.get_high_priority_open_count()
     }
